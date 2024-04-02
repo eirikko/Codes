@@ -1,0 +1,104 @@
+#include <iostream>
+#include <vector>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+
+template<typename T>
+class RingBuffer {
+private:
+	std::vector<T> buffer;
+	size_t capacity;
+	size_t head;
+	size_t tail;
+	size_t size;
+	std::mutex mtx;		//mutex for thread synchronization
+	std::condition_variable cvNotFull;		//condition variable that signalizes when the buffer is NOT full
+	std::condition_variable cvNotEmpty;		//condition variable that signalizes when the buffer is NOT empty
+
+public:
+	RingBuffer(size_t capacity) : buffer(capacity), capacity(capacity), head(0), tail(0), size(0) {}
+
+	bool isEmpty() const {
+		return size == 0;
+	}
+
+	bool isFull() const {
+		return size == capacity;
+	}
+
+	//Function that adds element to the buffer
+	void enqueue(const T& element) {
+		std::unique_lock<std::mutex> lock(mtx);		//locks the mutex
+		cvNotFull.wait(lock, [this]() {return !isFull(); });		//waits until buffer is not full
+
+		buffer[head] = element;		//adds element to the buffer
+		head = (head + 1) % capacity;		//updates head index
+		size++;		//increases buffer-size
+
+		lock.unlock();		//locks up mutex
+		cvNotEmpty.notify_one();		//notifies waiting thread that buffer is NOT empty
+	}
+
+	//Function that removes element from buffer
+	T dequeue() {
+		std::unique_lock<std::mutex> lock(mtx);		//locks mutex
+		cvNotEmpty.wait(lock, [this]() {return !isEmpty(); });		//waits until buffer is not empty
+
+		T element = buffer[tail];		//collects element from buffer
+		tail = (tail + 1) % capacity;
+		size--;		//reduce buffer-size
+
+		lock.unlock();		//locks up mutex
+		cvNotFull.notify_one();		//notifies waiting thread that buffer is NOT full
+
+		return element;
+}
+	size_t getSize() const {
+		return size;		//returns current buffer-size
+	}
+};
+
+//Function that takes input from keyboard and places elements in the buffer
+void keyInput(RingBuffer<char>& buffer) {
+	while (true) {
+		char input;
+		std::cin >> input;
+		buffer.enqueue(input);
+	}
+}
+
+//Function that will continously generate text which it adds to the buffer
+void textGenerate(RingBuffer<char>& buffer) {
+	std::string text = "To live is to die.\n";
+	size_t index = 0;
+	while (true) {
+		buffer.enqueue(text[index]);
+		index = (index + 1) % text.size();
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+}
+
+//Function that takes elements from buffer and prints to screen
+void printer(RingBuffer<char>& buffer) {
+	while (true) {
+		char c = buffer.dequeue();
+		std::cout << c;
+	}
+}
+
+int main() {
+	RingBuffer<char> ringBuffer(20);
+
+	//Threads for keyboard input, text generation and printing to screen
+	std::thread keyboardThread(keyInput, std::ref(ringBuffer));
+	std::thread generatorThread(textGenerate, std::ref(ringBuffer));
+	std::thread printerThread(printer, std::ref(ringBuffer));
+
+	//Combine the threads
+	keyboardThread.join();
+	generatorThread.join();
+	printerThread.join();
+
+	return 0;
+}
